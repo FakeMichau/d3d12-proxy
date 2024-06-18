@@ -55,19 +55,11 @@ void loadOriginalDXGI()
 
 BOOL WINAPI DllMain(HINSTANCE hinstDLL, DWORD fdwReason, LPVOID lpvReserved)
 {
-#ifdef LOGGING_ACTIVE
-	std::time_t t = std::time(nullptr);
-	std::string datetime(100, 0);
-#endif
-
 	switch (fdwReason)
 	{
 	case DLL_PROCESS_ATTACH:
-#ifdef LOGGING_ACTIVE
-		datetime.resize(std::strftime(&datetime[0], datetime.size(), "%d%m%Y_%H%M%OS", std::localtime(&t)));
-		prepareOfs(".\\dxgi-proxy-" + datetime + ".log");
+		prepareOfs(".\\dxgi-proxy.log");
 		LOG("dxgi-proxy DLL_PROCESS_ATTACH");
-#endif
 		loadOriginalDXGI();
 		break;
 
@@ -83,9 +75,7 @@ BOOL WINAPI DllMain(HINSTANCE hinstDLL, DWORD fdwReason, LPVOID lpvReserved)
 		if (originalDXGI)
 			FreeLibrary(originalDXGI);
 
-#ifdef LOGGING_ACTIVE
 		closeOfs();
-#endif
 
 		break;
 	}
@@ -95,27 +85,67 @@ BOOL WINAPI DllMain(HINSTANCE hinstDLL, DWORD fdwReason, LPVOID lpvReserved)
 
 #pragma region Adapter
 
+const std::string xessName = "xessD3D12BuildPipelines";
+
 HRESULT WINAPI detGetDesc3(IDXGIAdapter4* This, /* [annotation][out] */ _Out_  DXGI_ADAPTER_DESC3* pDesc)
 {
 	LOG("IDXGIAdapter4.GetDesc3");
 
+	// Walk the call stack to find the DLL that is calling the hooked function
+	void* callers[100];
+	unsigned short frames = CaptureStackBackTrace(0, 100, callers, NULL);
+	HANDLE process = GetCurrentProcess();
+	SymInitialize(process, NULL, TRUE);
+	SYMBOL_INFO* symbol = (SYMBOL_INFO*)calloc(sizeof(SYMBOL_INFO) + 256 * sizeof(char), 1);
+	symbol->MaxNameLen = 255;
+	symbol->SizeOfStruct = sizeof(SYMBOL_INFO);
+	bool xess = false;
+
+	for (unsigned int i = 0; i < frames; i++)
+	{
+		SymFromAddr(process, (DWORD64)callers[i], 0, symbol);
+
+		// Get module information for the current stack frame
+		DWORD moduleBase = SymGetModuleBase64(process, symbol->Address);
+
+		auto sn = std::string(symbol->Name);
+		LOG("detGetDesc3: " + sn);
+		if (sn == xessName)
+		{
+			xess = true;
+			break;
+		}
+	}
+
+	free(symbol);
+	SymCleanup(process);
+
 	auto result = (This->*ptrGetDesc3)(pDesc);
 
-	if (result == S_OK) // && (pDesc->VendorId == 0x8086 || pDesc->VendorId == 0x1002))
+	if (result == S_OK && pDesc->VendorId != 0x1414)
 	{
-		LOG("IDXGIAdapter4.GetDesc3 Spoofing card info");
-		pDesc->VendorId = 0x8086;
-		pDesc->DeviceId = 0x9a49;
-		//pDesc->SubSysId = 0x88ac1043;
-		//pDesc->Revision = 0x00a1;
+		if (xess)
+		{
+			LOG("IDXGIAdapter4.GetDesc3 Spoofing card as Intel");
+			pDesc->VendorId = 0x8086;
+			pDesc->DeviceId = 0x56a1;
 
-		std::wstring name(L"NVIDIA GeForce RTX 4090");
-		const wchar_t* szName = name.c_str();
-		std::memset(pDesc->Description, 0, sizeof(pDesc->Description));
-		std::memcpy(pDesc->Description, szName, 54);
+			std::wstring name(L"Intel(R) Arc(TM) A750 Graphics");
+			const wchar_t* szName = name.c_str();
+			std::memset(pDesc->Description, 0, sizeof(pDesc->Description));
+			std::memcpy(pDesc->Description, szName, 61);
+		}
+		else
+		{
+			LOG("IDXGIAdapter4.GetDesc3 Spoofing card as NVidia");
+			pDesc->VendorId = 0x10de;
+			pDesc->DeviceId = 0x2684;
 
-		//LUID luid = LUID{ 0, 0xDB1A };
-		//std::memcpy(&pDesc->AdapterLuid, &luid, 8);
+			std::wstring name(L"NVIDIA GeForce RTX 4090");
+			const wchar_t* szName = name.c_str();
+			std::memset(pDesc->Description, 0, sizeof(pDesc->Description));
+			std::memcpy(pDesc->Description, szName, 54);
+		}
 	}
 
 	AttachToAdapter(This);
@@ -130,23 +160,61 @@ HRESULT WINAPI detGetDesc2(IDXGIAdapter2* This, /* [annotation][out] */ _Out_  D
 {
 	LOG("IDXGIAdapter2.GetDesc2");
 
+	// Walk the call stack to find the DLL that is calling the hooked function
+	void* callers[100];
+	unsigned short frames = CaptureStackBackTrace(0, 100, callers, NULL);
+	HANDLE process = GetCurrentProcess();
+	SymInitialize(process, NULL, TRUE);
+	SYMBOL_INFO* symbol = (SYMBOL_INFO*)calloc(sizeof(SYMBOL_INFO) + 256 * sizeof(char), 1);
+	symbol->MaxNameLen = 255;
+	symbol->SizeOfStruct = sizeof(SYMBOL_INFO);
+	bool xess = false;
+
+	for (unsigned int i = 0; i < frames; i++)
+	{
+		SymFromAddr(process, (DWORD64)callers[i], 0, symbol);
+
+		// Get module information for the current stack frame
+		DWORD moduleBase = SymGetModuleBase64(process, symbol->Address);
+
+		auto sn = std::string(symbol->Name);
+		LOG("detGetDesc2: " + sn);
+		if (sn == xessName)
+		{
+			xess = true;
+			break;
+		}
+	}
+
+	free(symbol);
+	SymCleanup(process);
+
 	auto result = (This->*ptrGetDesc2)(pDesc);
 
-	if (result == S_OK) // && (pDesc->VendorId == 0x8086 || pDesc->VendorId == 0x1002))
+	if (result == S_OK && pDesc->VendorId != 0x1414)
 	{
-		LOG("IDXGIAdapter2.GetDesc2 Spoofing card info");
-		pDesc->VendorId = 0x8086;
-		pDesc->DeviceId = 0x9a49;
-		//pDesc->SubSysId = 0x88ac1043;
-		//pDesc->Revision = 0x00a1;
+		if (xess)
+		{
+			LOG("IDXGIAdapter4.GetDesc3 Spoofing card as Intel");
+			pDesc->VendorId = 0x8086;
+			pDesc->DeviceId = 0x56a1;
 
-		std::wstring name(L"NVIDIA GeForce RTX 4090");
-		const wchar_t* szName = name.c_str();
-		std::memset(pDesc->Description, 0, sizeof(pDesc->Description));
-		std::memcpy(pDesc->Description, szName, 54);
+			std::wstring name(L"Intel(R) Arc(TM) A750 Graphics");
+			const wchar_t* szName = name.c_str();
+			std::memset(pDesc->Description, 0, sizeof(pDesc->Description));
+			std::memcpy(pDesc->Description, szName, 61);
+		}
+		else
+		{
+			LOG("IDXGIAdapter4.GetDesc3 Spoofing card as NVidia");
+			pDesc->VendorId = 0x10de;
+			pDesc->DeviceId = 0x2684;
 
-		//LUID luid = LUID{ 0, 0xDB1A };
-		//std::memcpy(&pDesc->AdapterLuid, &luid, 8);
+			std::wstring name(L"NVIDIA GeForce RTX 4090");
+			const wchar_t* szName = name.c_str();
+			std::memset(pDesc->Description, 0, sizeof(pDesc->Description));
+			std::memcpy(pDesc->Description, szName, 54);
+		}
 	}
 
 	AttachToAdapter(This);
@@ -160,23 +228,61 @@ HRESULT WINAPI detGetDesc1(IDXGIAdapter1* This, /* [annotation][out] */ _Out_  D
 {
 	LOG("IDXGIAdapter1.GetDesc1");
 
+	// Walk the call stack to find the DLL that is calling the hooked function
+	void* callers[100];
+	unsigned short frames = CaptureStackBackTrace(0, 100, callers, NULL);
+	HANDLE process = GetCurrentProcess();
+	SymInitialize(process, NULL, TRUE);
+	SYMBOL_INFO* symbol = (SYMBOL_INFO*)calloc(sizeof(SYMBOL_INFO) + 256 * sizeof(char), 1);
+	symbol->MaxNameLen = 255;
+	symbol->SizeOfStruct = sizeof(SYMBOL_INFO);
+	bool xess = false;
+
+	for (unsigned int i = 0; i < frames; i++)
+	{
+		SymFromAddr(process, (DWORD64)callers[i], 0, symbol);
+
+		// Get module information for the current stack frame
+		DWORD moduleBase = SymGetModuleBase64(process, symbol->Address);
+
+		auto sn = std::string(symbol->Name);
+		LOG("detGetDesc1: " + sn);
+		if (sn == xessName)
+		{
+			xess = true;
+			break;
+		}
+	}
+
+	free(symbol);
+	SymCleanup(process);
+
 	auto result = (This->*ptrGetDesc1)(pDesc);
 
-	if (result == S_OK) // && pDesc->VendorId == 0x8086 || pDesc->VendorId == 0x1002)
+	if (result == S_OK && pDesc->VendorId != 0x1414)
 	{
-		LOG("IDXGIAdapter1.GetDesc1 Spoofing card info");
-		pDesc->VendorId = 0x8086;
-		pDesc->DeviceId = 0x9a49;
-		//pDesc->SubSysId = 0x88ac1043;
-		//pDesc->Revision = 0x00a1;
+		if (xess)
+		{
+			LOG("IDXGIAdapter4.GetDesc3 Spoofing card as Intel");
+			pDesc->VendorId = 0x8086;
+			pDesc->DeviceId = 0x56a1;
 
-		std::wstring name(L"NVIDIA GeForce RTX 4090");
-		const wchar_t* szName = name.c_str();
-		std::memset(pDesc->Description, 0, sizeof(pDesc->Description));
-		std::memcpy(pDesc->Description, szName, 54);
+			std::wstring name(L"Intel(R) Arc(TM) A750 Graphics");
+			const wchar_t* szName = name.c_str();
+			std::memset(pDesc->Description, 0, sizeof(pDesc->Description));
+			std::memcpy(pDesc->Description, szName, 61);
+		}
+		else
+		{
+			LOG("IDXGIAdapter4.GetDesc3 Spoofing card as NVidia");
+			pDesc->VendorId = 0x10de;
+			pDesc->DeviceId = 0x2684;
 
-		//LUID luid = LUID{ 0, 0xDB1A };
-		//std::memcpy(&pDesc->AdapterLuid, &luid, 8);
+			std::wstring name(L"NVIDIA GeForce RTX 4090");
+			const wchar_t* szName = name.c_str();
+			std::memset(pDesc->Description, 0, sizeof(pDesc->Description));
+			std::memcpy(pDesc->Description, szName, 54);
+		}
 	}
 
 	AttachToAdapter(This);
@@ -191,23 +297,61 @@ HRESULT WINAPI detGetDesc(IDXGIAdapter* This, /* [annotation][out] */ _Out_  DXG
 {
 	LOG("IDXGIAdapter.GetDesc");
 
+	// Walk the call stack to find the DLL that is calling the hooked function
+	void* callers[100];
+	unsigned short frames = CaptureStackBackTrace(0, 100, callers, NULL);
+	HANDLE process = GetCurrentProcess();
+	SymInitialize(process, NULL, TRUE);
+	SYMBOL_INFO* symbol = (SYMBOL_INFO*)calloc(sizeof(SYMBOL_INFO) + 256 * sizeof(char), 1);
+	symbol->MaxNameLen = 255;
+	symbol->SizeOfStruct = sizeof(SYMBOL_INFO);
+	bool xess = false;
+
+	for (unsigned int i = 0; i < frames; i++)
+	{
+		SymFromAddr(process, (DWORD64)callers[i], 0, symbol);
+
+		// Get module information for the current stack frame
+		DWORD moduleBase = SymGetModuleBase64(process, symbol->Address);
+
+		auto sn = std::string(symbol->Name);
+		LOG("detGetDesc: " + sn);
+		if (sn == xessName)
+		{
+			xess = true;
+			break;
+		}
+	}
+
+	free(symbol);
+	SymCleanup(process);
+
 	auto result = (This->*ptrGetDesc)(pDesc);
 
-	if (result == S_OK) // && (pDesc->VendorId == 0x8086 || pDesc->VendorId == 0x1002))
+	if (result == S_OK && pDesc->VendorId != 0x1414)
 	{
-		LOG("IDXGIAdapter.GetDesc Spoofing card info");
-		pDesc->VendorId = 0x8086;
-		pDesc->DeviceId = 0x9a49;
-		//pDesc->SubSysId = 0x88ac1043;
-		//pDesc->Revision = 0x00a1;
+		if (xess)
+		{
+			LOG("IDXGIAdapter4.GetDesc3 Spoofing card as Intel");
+			pDesc->VendorId = 0x8086;
+			pDesc->DeviceId = 0x56a1;
 
-		std::wstring name(L"NVIDIA GeForce RTX 4090");
-		const wchar_t* szName = name.c_str();
-		std::memset(pDesc->Description, 0, sizeof(pDesc->Description));
-		std::memcpy(pDesc->Description, szName, 54);
+			std::wstring name(L"Intel(R) Arc(TM) A750 Graphics");
+			const wchar_t* szName = name.c_str();
+			std::memset(pDesc->Description, 0, sizeof(pDesc->Description));
+			std::memcpy(pDesc->Description, szName, 61);
+		}
+		else
+		{
+			LOG("IDXGIAdapter4.GetDesc3 Spoofing card as NVidia");
+			pDesc->VendorId = 0x10de;
+			pDesc->DeviceId = 0x2684;
 
-		//LUID luid = LUID{ 0, 0xDB1A };
-		//std::memcpy(&pDesc->AdapterLuid, &luid, 8);
+			std::wstring name(L"NVIDIA GeForce RTX 4090");
+			const wchar_t* szName = name.c_str();
+			std::memset(pDesc->Description, 0, sizeof(pDesc->Description));
+			std::memcpy(pDesc->Description, szName, 54);
+		}
 	}
 
 	AttachToAdapter(This);
